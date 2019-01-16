@@ -5,21 +5,160 @@ output:
     keep_md: true
 ---
 
+This document contains both the code and results for the first assignment of the course Reproducible Research, from the Data Science especialization offered by John Hopkins University on Coursera.  
 
-## Loading and preprocessing the data
+Before doing anything, let's load some libraries we'll need.
+```{r Libraries,message=FALSE}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(tidyr)
+```
 
+```{r, echo=FALSE}
+###Just a bit of hidden code so that output looks fine
+options(scipen = 10, digits = 2)
+```
+
+
+## Reading the data
+
+Assuming that the data file is in the working directory, we can extract and read the data into a variable called 'activity'. After loading the data, we can check a summary of it to see what we're dealing with.
+
+```{r ReadData}
+unzip("activity.zip")
+activity <- read.csv("activity.csv", stringsAsFactors = FALSE)
+str(activity)
+summary(activity)
+```
+
+We have then three columns--steps, date and interval--with steps being the variable of interest, and date and interval giving the time intervals during which steps was measured. It's also evident there are many NAs in the data, but we will deal with that later. For now, the data is already tidy so the only transformation needed is to transform the 'date' column into dates.
+
+``` {r Dates}
+activity$date <- ymd(activity$date)
+```
 
 
 ## What is mean total number of steps taken per day?
 
+For this question we need to calculate the total number of steps per day and visualize it as a histogram.
+
+```{r TotalSteps}
+totalsteps <- activity %>%
+    group_by(date) %>%
+    summarise(steps = sum(steps, na.rm = TRUE))
+meantotsteps <- mean(totalsteps$steps)
+mediantotsteps <- median(totalsteps$steps)
+
+totalsteps %>%
+    ggplot(aes(steps)) + 
+    geom_histogram(bins=20) +
+    xlab("Total steps") 
+```
+
+The mean total number of steps taken each day is ```r meantotsteps``` and the median is ```r mediantotsteps```. There are 10 days where there were no steps counted. This is probably a consequence of ignoring NAs in this part. 
 
 
 ## What is the average daily activity pattern?
 
+Instead of calculating the number of steps per day, now we have to calculate the mean steps per 5 minute interval and then plot it as a timeseries. 
+
+``` {r DailyActivity}
+dailysteps <- activity %>%
+    group_by(interval) %>%
+    summarize(meansteps = mean(steps, na.rm = TRUE))
+
+maxsteps <- round(max(dailysteps$meansteps),2)
+
+dailysteps %>%
+    ggplot(aes(x=interval, y=meansteps)) + 
+    geom_line(lwd=1) +
+    ylab("Mean steps") +
+    xlab("Interval")
+```
+
+The interval with the maximum number of steps is ```r dailysteps$interval[which(dailysteps$meansteps == max(dailysteps$meansteps))]``` with ```r maxsteps``` steps.
 
 
 ## Imputing missing values
 
+First, we need to know how many NAs are there in the dataset, and how they are distributed.
+
+```{r NAsearch}
+sum(is.na(activity$steps))
+
+nasperday <- activity %>% 
+    group_by(date) %>%
+    mutate(isna = is.na(steps)) %>%
+    summarize(sumnas = sum(isna))
+nasperday
+unique(nasperday$sumnas)
+```
+
+This shows that NAs occur in whole days where no data was being recorded, and there are no days with incomplete recordings. Because of this, let's impute the missing values using the daily mean steps per interval. 
+
+```{r ImputingNAs}
+### Get the index of the days with NAs
+dayswnas <- which(nasperday$sumnas>0)
+
+### Spread activity to make it easy to modify it: activitynona
+activitynona <- activity %>%
+    spread(key=date, value=steps)
+
+### Replace the missing values
+activitynona[, dayswnas+1] <- dailysteps$meansteps
+    
+### Gather activitynona back
+activitynona <- activitynona %>%
+    gather(2:dim(activitynona)[2], key="date", value="steps") %>%
+    as_tibble
+activitynona$date <- ymd(activitynona$date)
+
+### Check that the NAs were imputed
+summary(activitynona)
+```
+
+With the values imputed, let's look again at a histogram of mean daily steps.
+
+```{r NoNaTotalSteps}
+totalstepsnona <- activitynona %>%
+    group_by(date) %>%
+    summarise(steps = sum(steps, na.rm = TRUE))
+meantotstepsnona <- mean(totalstepsnona$steps)
+mediantotstepsnona <- median(totalstepsnona$steps)
+
+totalstepsnona %>%
+    ggplot(aes(steps)) + 
+    geom_histogram(bins=20) +
+    xlab("Total steps") 
+```
+
+The mean total number of steps taken each day is ```r meantotstepsnona``` and the median is ```r mediantotstepsnona```. Both the mean and the median increased after imputing missing values.
 
 
 ## Are there differences in activity patterns between weekdays and weekends?
+
+First, we create a new dataset using the imputed dataset, including a column that indicates whether a given date is either a weekday or a weekend.
+
+```{r daysoftheweek}
+activityweek <- activitynona %>%
+    mutate(weekend = weekdays(date)=="Saturday"|weekdays(date)=="Sunday") %>%
+    mutate(dayofweek = ifelse(weekend,"weekend", "weekday")) %>%
+    select(interval, date, steps, dayofweek)
+activityweek$dayofweek <- as.factor(activityweek$dayofweek)
+```
+
+With the new dataset we can now see the difference in activity on weekdays and weekends, plotted as a timeseries of daily mean steps per interval. Activity during average weekdays starts and ends earlier than on weekends, peaks around the same time with a higher maximum value, but after the peak is lower than during average weekends. 
+
+``` {r DailyActivityWeek}
+dailyweeksteps <- activityweek %>%
+    group_by(interval, dayofweek) %>%
+    summarize(meansteps = mean(steps, na.rm = TRUE))
+
+dailyweeksteps %>%
+    ggplot(aes(x=interval, y=meansteps)) + 
+    facet_grid(dayofweek ~ .) +
+    geom_line(lwd=1) +
+    ylab("Mean steps") +
+    xlab("Interval")
+```
